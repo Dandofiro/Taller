@@ -9,24 +9,25 @@ from fpdf import FPDF
 
 try:
     import psycopg2
+    HAS_PSYCOPG2 = True
 except ImportError:
     HAS_PSYCOPG2 = False
 
 
 # ==========================================
-# CONFIGURACIÓN DEL NEGOCIO (FLORIDA)
+# BUSINESS CONFIGURATION (FLORIDA)
 # ==========================================
-NOMBRE_TALLER = "TU TALLER MECANICO LLC"
-DIRECCION_TALLER = "Miami / Orlando, FL"
-TELEFONO_TALLER = "(305) 555-0199"
-REGISTRO_FDACS = "MV-99999 (En trámite / Colocar tu # FDACS)"
-TAX_RATE_FL = 0.07  # 6% Estatal FL + 1% Discrecional del Condado (ajustar según tu condado)
+SHOP_NAME = "EURO.SPORT96 LLC"
+SHOP_ADDRESS = "Kissimmee, FL 34746"
+SHOP_PHONE = "(321) 271-3612"
+FDACS_REG = "MV-99999 (Pending / Enter your FL FDACS #)"
+TAX_RATE_FL = 0.07  # 6% FL State + 1% County Discretionary (adjust to your county)
 DB_FILE = "taller_florida.db"
 
-st.set_page_config(page_title="Taller FL - Gestión", page_icon="🔧", layout="centered")
+st.set_page_config(page_title="Mobile Shop FL - Management", page_icon="🔧", layout="centered")
 
 # ==========================================
-# AUTENTICACIÓN CON CONTRASEÑA
+# PASSWORD AUTHENTICATION
 # ==========================================
 def get_app_password() -> str:
     try:
@@ -40,12 +41,12 @@ def check_login() -> bool:
     if st.session_state.get("authenticated", False):
         return True
 
-    st.title("🔐 Acceso - Taller Móvil FL")
-    st.caption("Ingresa tu contraseña para gestionar agenda, órdenes y contabilidad.")
+    st.title("🔐 Login - Mobile Shop FL")
+    st.caption("Enter your password to manage appointments, work orders, and accounting.")
 
     with st.form("login_form"):
-        pwd = st.text_input("Contraseña", type="password")
-        submitted = st.form_submit_button("Entrar", use_container_width=True)
+        pwd = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Sign In", use_container_width=True)
 
         if submitted:
             expected = get_app_password()
@@ -53,7 +54,7 @@ def check_login() -> bool:
                 st.session_state["authenticated"] = True
                 st.rerun()
             else:
-                st.error("Contraseña incorrecta.")
+                st.error("Incorrect password.")
 
     return False
 
@@ -61,7 +62,7 @@ if not check_login():
     st.stop()
 
 # ==========================================
-# CONEXIÓN A BASE DE DATOS (POSTGRESQL / SQLITE)
+# DATABASE CONNECTION (POSTGRESQL / SQLITE)
 # ==========================================
 def get_database_url() -> str:
     try:
@@ -80,7 +81,7 @@ def get_conn():
         try:
             import psycopg2
         except ImportError as exc:
-            raise RuntimeError("Falta instalar 'psycopg2-binary' para conectar a PostgreSQL.") from exc
+            raise RuntimeError("Missing 'psycopg2-binary' to connect to PostgreSQL.") from exc
         return psycopg2.connect(db_url)
     return sqlite3.connect(DB_FILE, check_same_thread=False)
 
@@ -208,15 +209,15 @@ def init_db():
 init_db()
 
 # ==========================================
-# LÓGICA FISCAL DE FLORIDA (SALES TAX)
+# FLORIDA TAX LOGIC (SALES TAX)
 # ==========================================
 def calcular_totales_florida(df_items: pd.DataFrame):
     """
-    Regla FDOR Florida:
-    - Si la reparación incluye repuestos/materiales, el Sales Tax aplica sobre
-      el TOTAL (Mano de obra + Repuestos + tasas ambientales).
-    - Si es 100% mano de obra sin repuestos, el Sales Tax es $0.00.
-    - Las tasas ambientales de baterías ($1.50) y neumáticos ($1.00) se suman aparte.
+    FDOR Florida Rule:
+    - If the repair includes parts/materials, Sales Tax applies to the
+      TOTAL (Labor + Parts + environmental fees).
+    - If it is 100% labor with no parts, Sales Tax is $0.00.
+    - Battery ($1.50) and tire ($1.00) environmental fees are added separately.
     """
     if df_items.empty:
         return 0.0, 0.0, 0.0, 0.0, 0.0
@@ -239,11 +240,34 @@ def calcular_totales_florida(df_items: pd.DataFrame):
     return subtotal_mo, subtotal_rep, tasas_amb, sales_tax, total_final
 
 # ==========================================
-# GENERADOR DE PDF LEGAL PARA FLORIDA
+# FLORIDA LEGAL PDF GENERATOR
 # ==========================================
 def safe_pdf_text(text) -> str:
-    # FPDF clásico usa latin-1; reemplaza caracteres no soportados para evitar errores
     return str(text or "").encode("latin-1", "replace").decode("latin-1")
+
+def format_item_type_en(val: str) -> str:
+    return "LABOR" if val == "MANO_OBRA" else ("PARTS" if val == "REPUESTO" else str(val or ""))
+
+def format_condition_en(val: str) -> str:
+    mapping = {
+        "N/A": "N/A",
+        "Nuevo": "New",
+        "Usado": "Used",
+        "Reconstruido": "Remanufactured",
+    }
+    return mapping.get(str(val or ""), str(val or ""))
+
+def format_status_en(val: str) -> str:
+    mapping = {
+        "Pendiente": "Pending",
+        "En Camino": "En Route",
+        "Convertida a Orden": "Converted to Order",
+        "Cancelada": "Cancelled",
+        "Presupuesto": "Estimate",
+        "Aprobado": "Approved",
+        "Pagado": "Paid",
+    }
+    return mapping.get(str(val or ""), str(val or ""))
 
 def generar_pdf_orden(orden_id: int) -> str:
     p = ph()
@@ -262,119 +286,120 @@ def generar_pdf_orden(orden_id: int) -> str:
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 8, safe_pdf_text(NOMBRE_TALLER), ln=True)
+    pdf.cell(0, 8, safe_pdf_text(SHOP_NAME), ln=True)
     pdf.set_font("Arial", "", 9)
-    pdf.cell(0, 5, safe_pdf_text(f"{DIRECCION_TALLER} | Tel: {TELEFONO_TALLER}"), ln=True)
+    pdf.cell(0, 5, safe_pdf_text(f"{SHOP_ADDRESS} | Phone: {SHOP_PHONE}"), ln=True)
     pdf.set_font("Arial", "B", 9)
-    pdf.cell(0, 5, safe_pdf_text(f"FL Motor Vehicle Repair Reg #: {REGISTRO_FDACS}"), ln=True)
+    pdf.cell(0, 5, safe_pdf_text(f"FL Motor Vehicle Repair Reg #: {FDACS_REG}"), ln=True)
     pdf.ln(4)
 
     pdf.set_font("Arial", "B", 12)
-    doc_tipo = "PRESUPUESTO / ESTIMATE" if orden["estado"] == "Presupuesto" else "FACTURA / INVOICE"
-    pdf.cell(0, 8, safe_pdf_text(f"{doc_tipo} #00{orden_id} - Estado: {orden['estado']}"), ln=True, border="B")
+    doc_tipo = "ESTIMATE" if orden["estado"] == "Presupuesto" else "INVOICE"
+    estado_en = format_status_en(orden["estado"])
+    pdf.cell(0, 8, safe_pdf_text(f"{doc_tipo} #00{orden_id} - Status: {estado_en}"), ln=True, border="B")
     pdf.ln(2)
 
     pdf.set_font("Arial", "", 9)
-    pdf.cell(95, 5, safe_pdf_text(f"Cliente: {orden['nombre']}"), ln=False)
-    pdf.cell(95, 5, safe_pdf_text(f"Fecha Ingreso: {orden['fecha_ingreso']}"), ln=True)
-    pdf.cell(95, 5, safe_pdf_text(f"Telefono: {orden['telefono']}"), ln=False)
-    pdf.cell(95, 5, safe_pdf_text(f"Fecha Prometida: {orden['fecha_prometida']}"), ln=True)
-    pdf.cell(95, 5, safe_pdf_text(f"Vehiculo: {orden['marca_modelo_anio']}"), ln=False)
-    pdf.cell(95, 5, safe_pdf_text(f"Placa / VIN: {orden['placa']} / {orden['vin']}"), ln=True)
-    pdf.cell(95, 5, safe_pdf_text(f"Odometro Entrada: {orden['odometro_entrada']} mi"), ln=False)
-    pdf.cell(95, 5, safe_pdf_text(f"Odometro Salida: {orden['odometro_salida']} mi"), ln=True)
+    pdf.cell(95, 5, safe_pdf_text(f"Customer: {orden['nombre']}"), ln=False)
+    pdf.cell(95, 5, safe_pdf_text(f"Date In: {orden['fecha_ingreso']}"), ln=True)
+    pdf.cell(95, 5, safe_pdf_text(f"Phone: {orden['telefono']}"), ln=False)
+    pdf.cell(95, 5, safe_pdf_text(f"Promised Date: {orden['fecha_prometida']}"), ln=True)
+    pdf.cell(95, 5, safe_pdf_text(f"Vehicle: {orden['marca_modelo_anio']}"), ln=False)
+    pdf.cell(95, 5, safe_pdf_text(f"Plate / VIN: {orden['placa']} / {orden['vin']}"), ln=True)
+    pdf.cell(95, 5, safe_pdf_text(f"Odometer In: {orden['odometro_entrada']} mi"), ln=False)
+    pdf.cell(95, 5, safe_pdf_text(f"Odometer Out: {orden['odometro_salida']} mi"), ln=True)
     pdf.ln(4)
 
     pdf.set_font("Arial", "B", 9)
-    pdf.cell(25, 6, "Tipo", border=1)
-    pdf.cell(25, 6, "Condicion", border=1)
-    pdf.cell(85, 6, "Descripcion", border=1)
-    pdf.cell(15, 6, "Cant.", border=1, align="C")
-    pdf.cell(20, 6, "P.Unit", border=1, align="R")
+    pdf.cell(25, 6, "Type", border=1)
+    pdf.cell(28, 6, "Condition", border=1)
+    pdf.cell(82, 6, "Description", border=1)
+    pdf.cell(15, 6, "Qty/Hrs", border=1, align="C")
+    pdf.cell(20, 6, "Unit Price", border=1, align="R")
     pdf.cell(20, 6, "Total", border=1, align="R", ln=True)
 
     pdf.set_font("Arial", "", 8)
     for _, r in items.iterrows():
         tot_l = float(r["cantidad"]) * float(r["precio_unitario"])
-        pdf.cell(25, 6, safe_pdf_text(r["tipo"]), border=1)
-        pdf.cell(25, 6, safe_pdf_text(r["condicion"]), border=1)
-        pdf.cell(85, 6, safe_pdf_text(r["descripcion"])[:45], border=1)
+        pdf.cell(25, 6, safe_pdf_text(format_item_type_en(r["tipo"])), border=1)
+        pdf.cell(28, 6, safe_pdf_text(format_condition_en(r["condicion"])), border=1)
+        pdf.cell(82, 6, safe_pdf_text(r["descripcion"])[:44], border=1)
         pdf.cell(15, 6, safe_pdf_text(r["cantidad"]), border=1, align="C")
         pdf.cell(20, 6, f"${float(r['precio_unitario']):.2f}", border=1, align="R")
         pdf.cell(20, 6, f"${tot_l:.2f}", border=1, align="R", ln=True)
 
     pdf.ln(3)
     pdf.set_font("Arial", "", 9)
-    pdf.cell(150, 5, "Subtotal Mano de Obra:", align="R")
+    pdf.cell(150, 5, "Labor Subtotal:", align="R")
     pdf.cell(40, 5, f"${sub_mo:.2f}", align="R", ln=True)
-    pdf.cell(150, 5, "Subtotal Repuestos:", align="R")
+    pdf.cell(150, 5, "Parts Subtotal:", align="R")
     pdf.cell(40, 5, f"${sub_rep:.2f}", align="R", ln=True)
     if tasas > 0:
-        pdf.cell(150, 5, "FL Environmental Fees (Baterias/Llantas):", align="R")
+        pdf.cell(150, 5, "FL Environmental Fees (Batteries/Tires):", align="R")
         pdf.cell(40, 5, f"${tasas:.2f}", align="R", ln=True)
     pdf.cell(150, 5, f"FL Sales Tax ({TAX_RATE_FL*100:.1f}%):", align="R")
     pdf.cell(40, 5, f"${tax:.2f}", align="R", ln=True)
     pdf.set_font("Arial", "B", 11)
-    pdf.cell(150, 7, "TOTAL A PAGAR (USD):", align="R")
+    pdf.cell(150, 7, "TOTAL DUE (USD):", align="R")
     pdf.cell(40, 7, f"${total:.2f}", align="R", ln=True)
 
     pdf.ln(5)
     pdf.set_font("Arial", "B", 7)
-    pdf.cell(0, 4, "AVISO LEGAL DEL ESTADO DE FLORIDA (FS 559.905):", ln=True)
+    pdf.cell(0, 4, "FLORIDA STATUTE NOTICE (FS 559.905):", ln=True)
     pdf.set_font("Arial", "", 7)
     dev_txt = (
-        "SI, el cliente solicita devolucion de piezas reemplazadas."
+        "YES, customer requests return of replaced parts."
         if orden["devolucion_piezas"]
-        else "NO, el cliente renuncia a conservar piezas reemplazadas."
+        else "NO, customer waives return of replaced parts."
     )
     pdf.multi_cell(0, 3.5, safe_pdf_text(
-        f"1. Piezas viejas: {dev_txt}\n"
-        "2. Bajo la ley de Florida, el cargo final no excedera el presupuesto escrito en mas del 10% sin autorizacion previa del cliente.\n"
-        "3. Garantia: 90 dias o 3,000 millas en mano de obra. Repuestos sujetos a garantia del fabricante."
+        f"1. Replaced Parts: {dev_txt}\n"
+        "2. Under Florida law, the final charge may not exceed the written estimate by more than 10% without prior customer authorization.\n"
+        "3. Warranty: 90 days or 3,000 miles on labor. Parts subject to manufacturer warranty."
     ))
 
     out_dir = "/tmp" if os.path.exists("/tmp") else "."
     safe_name = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in str(orden["nombre"]))
-    filename = os.path.join(out_dir, f"Orden_{orden_id}_{safe_name}.pdf")
+    filename = os.path.join(out_dir, f"Order_{orden_id}_{safe_name}.pdf")
     pdf.output(filename)
     return filename
 
 # ==========================================
-# ENCABEZADO Y CIERRE DE SESIÓN
+# HEADER AND LOGOUT
 # ==========================================
 col_t1, col_t2 = st.columns([4, 1])
 with col_t1:
-    st.title("🔧 Taller Móvil FL")
-    st.caption("Base de datos: PostgreSQL" if is_postgres() else "Base de datos: SQLite local")
+    st.title("🔧 Mobile Shop FL")
+    st.caption("Database: PostgreSQL" if is_postgres() else "Database: Local SQLite")
 with col_t2:
     st.write("")
-    if st.button("Salir"):
+    if st.button("Logout"):
         st.session_state["authenticated"] = False
         st.rerun()
 
-menu = st.tabs(["📅 Agenda", "📋 Nueva Orden", "🛠️ Órdenes", "💵 Contabilidad"])
+menu = st.tabs(["📅 Schedule", "📋 New Order", "🛠️ Work Orders", "💵 Accounting"])
 
 # ------------------------------------------
-# TAB 0: AGENDA DE CITAS Y RUTAS (MÓVIL)
+# TAB 0: APPOINTMENTS & ROUTES (MOBILE)
 # ------------------------------------------
 with menu[0]:
-    st.subheader("Agenda de Servicios")
+    st.subheader("Service Schedule")
 
-    with st.expander("➕ Agendar Nueva Cita", expanded=False):
+    with st.expander("➕ Schedule New Appointment", expanded=False):
         with st.form("form_nueva_cita", clear_on_submit=True):
             col_f1, col_f2 = st.columns(2)
             with col_f1:
-                cita_fecha = st.date_input("Fecha de visita")
+                cita_fecha = st.date_input("Visit date")
             with col_f2:
-                cita_hora = st.time_input("Hora estimada")
+                cita_hora = st.time_input("Estimated time")
 
-            cita_cli = st.text_input("Nombre del Cliente *")
-            cita_tel = st.text_input("Teléfono (WhatsApp/SMS) *")
-            cita_veh = st.text_input("Vehículo (Año, Marca, Modelo) *", placeholder="Ej: 2020 Toyota Camry")
-            cita_dir = st.text_input("Dirección / Ubicación del vehículo", placeholder="Ej: 1234 NW 7th St, Miami, FL")
-            cita_mot = st.text_area("Trabajo / Falla reportada")
+            cita_cli = st.text_input("Customer Name *")
+            cita_tel = st.text_input("Phone (WhatsApp/SMS) *")
+            cita_veh = st.text_input("Vehicle (Year, Make, Model) *", placeholder="e.g., 2020 Toyota Camry")
+            cita_dir = st.text_input("Address / Vehicle Location", placeholder="e.g., 1234 NW 7th St, Miami, FL")
+            cita_mot = st.text_area("Service / Reported Issue")
 
-            if st.form_submit_button("Guardar Cita", use_container_width=True):
+            if st.form_submit_button("Save Appointment", use_container_width=True):
                 if cita_cli.strip() and cita_tel.strip() and cita_veh.strip():
                     p = ph()
                     execute_write(
@@ -390,12 +415,12 @@ with menu[0]:
                             cita_mot.strip(),
                         ),
                     )
-                    st.success("✅ Cita agendada.")
+                    st.success("✅ Appointment scheduled.")
                     st.rerun()
                 else:
-                    st.error("Completa cliente, teléfono y vehículo (*).")
+                    st.error("Please complete customer, phone, and vehicle (*).")
 
-    ver_todas = st.checkbox("Mostrar citas completadas / canceladas", value=False)
+    ver_todas = st.checkbox("Show completed / cancelled appointments", value=False)
     query_citas = (
         "SELECT * FROM citas ORDER BY fecha ASC, hora ASC"
         if ver_todas
@@ -404,12 +429,13 @@ with menu[0]:
     df_citas = read_df(query_citas)
 
     if df_citas.empty:
-        st.info("No tienes citas pendientes en la agenda.")
+        st.info("No pending appointments on the schedule.")
     else:
         for _, c in df_citas.iterrows():
             cid = int(c["id"])
+            estado_badge = format_status_en(c["estado"])
             with st.container(border=True):
-                st.markdown(f"**🕒 {c['fecha']} — {c['hora']}** | `{c['estado']}`")
+                st.markdown(f"**🕒 {c['fecha']} — {c['hora']}** | `{estado_badge}`")
                 st.markdown(f"**{c['cliente_nombre']}** ({c['telefono']}) — *{c['vehiculo']}*")
                 if c["direccion"]:
                     st.caption(f"📍 {c['direccion']}")
@@ -420,11 +446,10 @@ with menu[0]:
                 with col_b1:
                     if c["direccion"]:
                         maps_q = str(c["direccion"]).replace(" ", "+")
-                        #st.link_button("🗺️ Mapa", f"https://maps.apple.com/?q={maps_q}", use_container_width=True)
-                        st.link_button("🗺️ Mapa", f"https://www.google.com/maps/search/?api=1&query={maps_q}", use_container_width=True)
+                        st.link_button("🗺️ Map", f"https://www.google.com/maps/search/?api=1&query={maps_q}", use_container_width=True)
                 with col_b2:
                     if c["estado"] in ("Pendiente", "En Camino"):
-                        if st.button("🔧 Iniciar Orden", key=f"conv_{cid}", use_container_width=True):
+                        if st.button("🔧 Start Order", key=f"conv_{cid}", use_container_width=True):
                             p = ph()
                             cli_id = execute_write(
                                 f"INSERT INTO clientes (nombre, telefono) VALUES ({p}, {p})",
@@ -448,36 +473,36 @@ with menu[0]:
                                 ),
                             )
                             execute_write(f"UPDATE citas SET estado = 'Convertida a Orden' WHERE id = {p}", (cid,))
-                            st.success("Orden creada. Ve a la pestaña 'Órdenes' para completar odómetro, repuestos y mano de obra.")
+                            st.success("Work order created. Go to 'Work Orders' to enter odometer, parts, and labor.")
                             st.rerun()
                 with col_b3:
                     if c["estado"] in ("Pendiente", "En Camino"):
-                        if st.button("❌ Cancelar", key=f"canc_{cid}", use_container_width=True):
+                        if st.button("❌ Cancel", key=f"canc_{cid}", use_container_width=True):
                             p = ph()
                             execute_write(f"UPDATE citas SET estado = 'Cancelada' WHERE id = {p}", (cid,))
                             st.rerun()
 
 # ------------------------------------------
-# TAB 1: CREAR CLIENTE, VEHÍCULO Y ORDEN
+# TAB 1: CREATE CUSTOMER, VEHICLE & ORDER
 # ------------------------------------------
 with menu[1]:
-    st.subheader("Registrar Servicio / Presupuesto")
+    st.subheader("Create Service / Estimate")
     with st.form("form_nueva_orden", clear_on_submit=True):
-        c_nombre = st.text_input("Nombre del Cliente *")
-        c_tel = st.text_input("Teléfono (WhatsApp/SMS) *")
-        v_desc = st.text_input("Vehículo (Año, Marca, Modelo) *", placeholder="Ej: 2018 Ford F-150")
+        c_nombre = st.text_input("Customer Name *")
+        c_tel = st.text_input("Phone (WhatsApp/SMS) *")
+        v_desc = st.text_input("Vehicle (Year, Make, Model) *", placeholder="e.g., 2018 Ford F-150")
         col1, col2 = st.columns(2)
         with col1:
-            v_placa = st.text_input("Placa")
-            odo_in = st.number_input("Odómetro Entrada (mi) *", min_value=0, step=100)
+            v_placa = st.text_input("License Plate")
+            odo_in = st.number_input("Odometer In (mi) *", min_value=0, step=100)
         with col2:
-            v_vin = st.text_input("VIN (Opcional)")
-            f_prom = st.date_input("Fecha Prometida")
+            v_vin = st.text_input("VIN (Optional)")
+            f_prom = st.date_input("Promised Date")
 
-        dev_piezas = st.checkbox("Cliente solicita devolución de piezas viejas (Ley FL)")
-        notas = st.text_area("Falla reportada por el cliente")
+        dev_piezas = st.checkbox("Customer requests return of old parts (FL Law)")
+        notas = st.text_area("Issue reported by customer")
 
-        if st.form_submit_button("Crear Orden de Servicio", use_container_width=True):
+        if st.form_submit_button("Create Work Order", use_container_width=True):
             if c_nombre.strip() and c_tel.strip() and v_desc.strip():
                 p = ph()
                 cli_id = execute_write(
@@ -504,12 +529,12 @@ with menu[1]:
                         notas.strip(),
                     ),
                 )
-                st.success("✅ Orden creada. Ve a 'Órdenes' para agregar repuestos y mano de obra.")
+                st.success("✅ Order created. Go to 'Work Orders' to add parts and labor.")
             else:
-                st.error("Por favor completa los campos obligatorios (*).")
+                st.error("Please fill in all required fields (*).")
 
 # ------------------------------------------
-# TAB 2: GESTIONAR ÍTEMS, REGLA 10% Y PDF
+# TAB 2: MANAGE ITEMS, 10% RULE & PDF
 # ------------------------------------------
 with menu[2]:
     df_ordenes = read_df("""
@@ -521,21 +546,20 @@ with menu[2]:
     """)
 
     if df_ordenes.empty:
-        st.info("No hay órdenes registradas aún.")
+        st.info("No work orders recorded yet.")
     else:
         opciones = {
-            f"#{r['id']} - {r['nombre']} ({r['marca_modelo_anio']}) [{r['estado']}]": int(r["id"])
+            f"#{r['id']} - {r['nombre']} ({r['marca_modelo_anio']}) [{format_status_en(r['estado'])}]": int(r["id"])
             for _, r in df_ordenes.iterrows()
         }
-        sel_label = st.selectbox("Selecciona una Orden:", list(opciones.keys()))
+        sel_label = st.selectbox("Select a Work Order:", list(opciones.keys()))
         oid = opciones[sel_label]
         orden_actual = df_ordenes[df_ordenes["id"] == oid].iloc[0]
 
-        # Actualizar odómetro de entrada si la orden vino desde la Agenda en 0
         if int(orden_actual["odometro_entrada"] or 0) == 0:
-            with st.expander("📏 Registrar Odómetro de Entrada (Obligatorio FL)", expanded=True):
-                odo_in_edit = st.number_input("Millaje actual del vehículo", min_value=0, step=100, key=f"odoin_{oid}")
-                if st.button("Guardar Odómetro Entrada", key=f"save_odoin_{oid}"):
+            with st.expander("📏 Record Odometer In (Required in FL)", expanded=True):
+                odo_in_edit = st.number_input("Current vehicle mileage", min_value=0, step=100, key=f"odoin_{oid}")
+                if st.button("Save Odometer In", key=f"save_odoin_{oid}"):
                     p = ph()
                     execute_write(
                         f"UPDATE ordenes SET odometro_entrada = {p}, odometro_salida = {p} WHERE id = {p}",
@@ -543,24 +567,32 @@ with menu[2]:
                     )
                     st.rerun()
 
-        with st.expander("➕ Agregar Mano de Obra o Repuesto", expanded=True):
+        with st.expander("➕ Add Labor or Part", expanded=True):
             with st.form("add_item", clear_on_submit=True):
-                i_tipo = st.selectbox("Tipo", ["MANO_OBRA", "REPUESTO"])
-                i_cond = st.selectbox("Condición (Obligatorio FL para repuestos)", ["N/A", "Nuevo", "Usado", "Reconstruido"])
-                i_desc = st.text_input("Descripción del trabajo o pieza")
+                i_tipo = st.selectbox(
+                    "Type",
+                    ["MANO_OBRA", "REPUESTO"],
+                    format_func=format_item_type_en,
+                )
+                i_cond = st.selectbox(
+                    "Condition (Required in FL for parts)",
+                    ["N/A", "Nuevo", "Usado", "Reconstruido"],
+                    format_func=format_condition_en,
+                )
+                i_desc = st.text_input("Job or part description")
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    i_cant = st.number_input("Cantidad / Horas", min_value=0.5, value=1.0, step=0.5)
+                    i_cant = st.number_input("Qty / Hours", min_value=0.5, value=1.0, step=0.5)
                 with c2:
-                    i_precio = st.number_input("Precio Unit. ($)", min_value=0.0, step=5.0)
+                    i_precio = st.number_input("Unit Price ($)", min_value=0.0, step=5.0)
                 with c3:
                     i_fee = st.selectbox(
-                        "Tasa Ambiental FL",
+                        "FL Environmental Fee",
                         [0.0, 1.50, 1.00],
-                        format_func=lambda x: "Ninguna ($0)" if x == 0 else ("Batería ($1.50)" if x == 1.5 else "Neumático ($1.00)"),
+                        format_func=lambda x: "None ($0)" if x == 0 else ("Battery ($1.50)" if x == 1.5 else "Tire ($1.00)"),
                     )
 
-                if st.form_submit_button("Agregar Ítem", use_container_width=True):
+                if st.form_submit_button("Add Item", use_container_width=True):
                     if i_desc.strip():
                         p = ph()
                         execute_write(
@@ -574,45 +606,55 @@ with menu[2]:
         df_items = read_df(f"SELECT * FROM items_orden WHERE orden_id = {p} ORDER BY id ASC", (oid,))
 
         if not df_items.empty:
+            df_items_view = df_items.copy()
+            df_items_view["tipo"] = df_items_view["tipo"].map(format_item_type_en)
+            df_items_view["condicion"] = df_items_view["condicion"].map(format_condition_en)
+            df_items_view = df_items_view.rename(columns={
+                "tipo": "Type",
+                "condicion": "Condition",
+                "descripcion": "Description",
+                "cantidad": "Qty/Hrs",
+                "precio_unitario": "Unit Price",
+            })
             st.dataframe(
-                df_items[["tipo", "condicion", "descripcion", "cantidad", "precio_unitario"]],
+                df_items_view[["Type", "Condition", "Description", "Qty/Hrs", "Unit Price"]],
                 use_container_width=True,
                 hide_index=True,
             )
             sub_mo, sub_rep, tasas, tax, total = calcular_totales_florida(df_items)
 
             st.markdown(f"""
-            * **Mano de Obra:** `${sub_mo:.2f}` | **Repuestos:** `${sub_rep:.2f}`
-            * **FL Sales Tax ({TAX_RATE_FL*100:.1f}%):** `${tax:.2f}` *(Aplica sobre total si hay repuestos)*
-            * ### Total: `${total:.2f}`
+- **Labor:** `${sub_mo:.2f}` | **Parts:** `${sub_rep:.2f}`
+- **FL Sales Tax ({TAX_RATE_FL*100:.1f}%):** `${tax:.2f}` *(Applies to total when parts are included)*
+- ### Total: `${total:.2f}`
             """)
 
             presup_base = float(orden_actual["monto_presupuestado"] or 0.0)
             if presup_base > 0 and total > (presup_base * 1.10) and int(orden_actual["aprobacion_extra"] or 0) == 0:
                 st.error(
-                    f"⚠️ ALERTA LEY DE FLORIDA: El total (${total:.2f}) supera en más del 10% al presupuesto aprobado (${presup_base:.2f}). "
-                    "Debes pedir autorización al cliente antes de facturar."
+                    f"⚠️ FLORIDA LAW ALERT: Total (${total:.2f}) exceeds the approved estimate (${presup_base:.2f}) by more than 10%. "
+                    "You must obtain customer authorization before billing."
                 )
-                if st.button("✅ Marcar que el cliente autorizó el incremento por SMS/Llamada"):
+                if st.button("✅ Mark that customer authorized the increase via SMS/Call"):
                     execute_write(f"UPDATE ordenes SET aprobacion_extra = 1 WHERE id = {p}", (oid,))
                     st.rerun()
 
             col_a, col_b = st.columns(2)
             with col_a:
-                if st.button("📌 Fijar Presupuesto Base", use_container_width=True):
+                if st.button("📌 Set Base Estimate", use_container_width=True):
                     execute_write(
                         f"UPDATE ordenes SET monto_presupuestado = {p}, estado = 'Aprobado' WHERE id = {p}",
                         (float(total), oid),
                     )
-                    st.success("Presupuesto fijado.")
+                    st.success("Estimate set.")
                     st.rerun()
 
             with col_b:
-                if st.button("📄 Generar PDF (WhatsApp)", use_container_width=True):
+                if st.button("📄 Generate PDF (WhatsApp)", use_container_width=True):
                     pdf_path = generar_pdf_orden(oid)
                     with open(pdf_path, "rb") as f:
                         st.download_button(
-                            "⬇️ Descargar PDF para enviar",
+                            "⬇️ Download PDF to send",
                             f,
                             file_name=os.path.basename(pdf_path),
                             mime="application/pdf",
@@ -621,21 +663,21 @@ with menu[2]:
 
             if orden_actual["estado"] != "Pagado":
                 st.divider()
-                st.markdown("**Cerrar Orden y Registrar Cobro**")
+                st.markdown("**Close Order and Record Payment**")
                 odo_init = int(orden_actual["odometro_salida"] or 0)
-                odo_out = st.number_input("Odómetro de Salida (mi)", min_value=odo_init, value=odo_init)
-                metodo = st.selectbox("Método de Pago recibido", ["Zelle", "Efectivo", "Tarjeta / Square", "Transferencia"])
-                if st.button("💰 Registrar Pago y Cerrar Orden", type="primary", use_container_width=True):
+                odo_out = st.number_input("Odometer Out (mi)", min_value=odo_init, value=odo_init)
+                metodo = st.selectbox("Payment method received", ["Zelle", "Cash", "Card / Square", "Bank Transfer"])
+                if st.button("💰 Record Payment & Close Order", type="primary", use_container_width=True):
                     execute_write(
                         f"UPDATE ordenes SET estado = 'Pagado', odometro_salida = {p} WHERE id = {p}",
                         (int(odo_out), oid),
                     )
                     execute_write(
                         f"""INSERT INTO finanzas (fecha, tipo, categoria, descripcion, orden_id, subtotal, sales_tax, total, metodo_pago)
-                            VALUES ({p}, 'INGRESO', 'Servicios Mecánicos', {p}, {p}, {p}, {p}, {p}, {p})""",
+                            VALUES ({p}, 'INGRESO', 'Mechanical Services', {p}, {p}, {p}, {p}, {p}, {p})""",
                         (
                             datetime.now().strftime("%Y-%m-%d"),
-                            f"Cobro Orden #{oid} - {orden_actual['nombre']}",
+                            f"Payment Order #{oid} - {orden_actual['nombre']}",
                             oid,
                             float(sub_mo + sub_rep + tasas),
                             float(tax),
@@ -643,25 +685,25 @@ with menu[2]:
                             metodo,
                         ),
                     )
-                    st.success("🎉 Orden pagada e ingreso registrado en contabilidad.")
+                    st.success("🎉 Order paid and income recorded in accounting.")
                     st.rerun()
 
 # ------------------------------------------
-# TAB 3: CONTROL DE ENTRADAS, SALIDAS Y TAXES
+# TAB 3: INCOME, EXPENSES & TAXES
 # ------------------------------------------
 with menu[3]:
-    st.subheader("Control Financiero y Fiscal (FL)")
+    st.subheader("Financial & Tax Control (FL)")
 
-    with st.expander("➖ Registrar Salida de Dinero (Gasto / Repuesto)"):
+    with st.expander("➖ Record Expense (Part / Business Cost)"):
         with st.form("form_gasto", clear_on_submit=True):
             g_cat = st.selectbox(
-                "Categoría (Deducible IRS)",
-                ["Compra de Repuestos", "Herramientas y Equipos", "Combustible / Van", "Publicidad / Software", "Licencias / Seguros"],
+                "Category (IRS Deductible)",
+                ["Parts Purchase", "Tools & Equipment", "Fuel / Van", "Marketing / Software", "Licenses / Insurance"],
             )
-            g_desc = st.text_input("Detalle (Ej: AutoZone - Pastillas freno F-150)")
-            g_monto = st.number_input("Monto Total Pagado ($)", min_value=0.01, step=5.0)
-            g_met = st.selectbox("Pagado con", ["Tarjeta Débito Negocio", "Tarjeta Crédito Negocio", "Efectivo", "Zelle"])
-            if st.form_submit_button("Guardar Gasto", use_container_width=True):
+            g_desc = st.text_input("Details (e.g., AutoZone - F-150 brake pads)")
+            g_monto = st.number_input("Total Amount Paid ($)", min_value=0.01, step=5.0)
+            g_met = st.selectbox("Paid with", ["Business Debit Card", "Business Credit Card", "Cash", "Zelle"])
+            if st.form_submit_button("Save Expense", use_container_width=True):
                 p = ph()
                 execute_write(
                     f"""INSERT INTO finanzas (fecha, tipo, categoria, descripcion, orden_id, subtotal, sales_tax, total, metodo_pago)
@@ -675,7 +717,7 @@ with menu[3]:
                         g_met,
                     ),
                 )
-                st.success("Gasto registrado.")
+                st.success("Expense recorded.")
                 st.rerun()
 
     df_fin = read_df("SELECT * FROM finanzas ORDER BY id DESC")
@@ -687,30 +729,41 @@ with menu[3]:
         utilidad_neta = (ingresos - tax_recaudado) - egresos
 
         c1, c2 = st.columns(2)
-        c1.metric("Ingresos Totales", f"${ingresos:,.2f}")
-        c2.metric("Gastos Totales", f"${egresos:,.2f}")
+        c1.metric("Total Income", f"${ingresos:,.2f}")
+        c2.metric("Total Expenses", f"${egresos:,.2f}")
 
         c3, c4 = st.columns(2)
-        c3.metric("Utilidad Real (Sin Tax)", f"${utilidad_neta:,.2f}")
+        c3.metric("Net Profit (Excl. Tax)", f"${utilidad_neta:,.2f}")
         c4.metric(
-            "FL Sales Tax a Declarar",
+            "FL Sales Tax Payable",
             f"${tax_recaudado:,.2f}",
-            help="Este dinero pertenece al Florida Dept. of Revenue, no es ganancia.",
+            help="This money belongs to the Florida Dept. of Revenue, not profit.",
         )
 
+        df_fin_view = df_fin.copy()
+        df_fin_view["tipo"] = df_fin_view["tipo"].map({"INGRESO": "INCOME", "EGRESO": "EXPENSE"}).fillna(df_fin_view["tipo"])
+        df_fin_view = df_fin_view.rename(columns={
+            "fecha": "Date",
+            "tipo": "Type",
+            "categoria": "Category",
+            "descripcion": "Description",
+            "sales_tax": "Sales Tax",
+            "total": "Total",
+            "metodo_pago": "Payment Method",
+        })
         st.dataframe(
-            df_fin[["fecha", "tipo", "categoria", "descripcion", "sales_tax", "total", "metodo_pago"]],
+            df_fin_view[["Date", "Type", "Category", "Description", "Sales Tax", "Total", "Payment Method"]],
             use_container_width=True,
             hide_index=True,
         )
 
         csv = df_fin.to_csv(index=False).encode("utf-8")
         st.download_button(
-            label="📥 Exportar Contabilidad a CSV (Para Contador / QuickBooks)",
+            label="📥 Export Accounting to CSV (For Accountant / QuickBooks)",
             data=csv,
-            file_name=f"Contabilidad_Taller_FL_{datetime.now().strftime('%Y_%m')}.csv",
+            file_name=f"Accounting_Shop_FL_{datetime.now().strftime('%Y_%m')}.csv",
             mime="text/csv",
             use_container_width=True,
         )
     else:
-        st.info("Aún no hay movimientos financieros registrados.")
+        st.info("No financial transactions recorded yet.")
